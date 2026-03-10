@@ -24,19 +24,25 @@ class LocationRequest(BaseModel):
 
 
 async def call_openai(db: AsyncSession, system_prompt: str, user_message: str, max_tokens: int = 1000) -> str:
-    """Helper to call OpenAI API."""
+    """Helper to call any OpenAI-compatible API (OpenAI, Ollama, OpenRouter, Chutes, etc)."""
     import httpx
     
     api_key = await get_setting_value(db, "openai_api_key")
+    base_url = (await get_setting_value(db, "ai_base_url") or "https://api.openai.com/v1").rstrip("/")
     model = await get_setting_value(db, "openai_model") or "gpt-4o"
     
     if not api_key:
-        raise HTTPException(status_code=400, detail="OpenAI API key not configured. Go to Settings.")
+        raise HTTPException(status_code=400, detail="AI API key not configured. Go to Settings.")
     
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    headers = {"Content-Type": "application/json"}
+    # Some local servers (Ollama) don't need auth; only add if key is non-empty
+    if api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key}"
+    
+    async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            f"{base_url}/chat/completions",
+            headers=headers,
             json={
                 "model": model,
                 "messages": [
@@ -49,7 +55,7 @@ async def call_openai(db: AsyncSession, system_prompt: str, user_message: str, m
         )
         
         if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"OpenAI API error: {resp.text}")
+            raise HTTPException(status_code=502, detail=f"AI API error ({base_url}): {resp.text}")
         
         data = resp.json()
         return data["choices"][0]["message"]["content"]
