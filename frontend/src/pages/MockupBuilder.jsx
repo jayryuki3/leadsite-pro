@@ -116,10 +116,15 @@ export default function MockupBuilder() {
         instruction: aiInstruction,
       })
       setHtmlContent(res.data.html)
+      setSelectedMockup(prev => ({ ...prev, version: res.data.version }))
       setAiInstruction('')
-      toast.success(`Applied: "${res.data.instruction_applied}"`)
+      toast.success(`v${res.data.version} - Applied: "${res.data.instruction_applied}"`)
+      // Refresh mockup list so dropdown shows updated version
+      const mockupsRes = await api.get('/mockups/')
+      setMockups(mockupsRes.data.mockups)
     } catch (err) {
-      toast.error('AI edit failed')
+      const detail = err.response?.data?.detail || err.message
+      toast.error('AI edit failed: ' + detail)
     } finally {
       setAiEditing(false)
     }
@@ -128,8 +133,15 @@ export default function MockupBuilder() {
   const updatePreview = () => {
     if (iframeRef.current && htmlContent) {
       const doc = iframeRef.current.contentDocument
+      // Inject <base target="_self"> so all navigation stays inside the iframe
+      let html = htmlContent
+      if (html.includes('<head>')) {
+        html = html.replace('<head>', '<head><base target="_self">')
+      } else if (html.includes('<html>')) {
+        html = html.replace('<html>', '<html><head><base target="_self"></head>')
+      }
       doc.open()
-      doc.write(htmlContent)
+      doc.write(html)
       doc.close()
     }
   }
@@ -259,7 +271,7 @@ export default function MockupBuilder() {
                 ref={iframeRef}
                 className="flex-1 w-full bg-white"
                 title="Mockup Preview"
-                sandbox="allow-scripts allow-same-origin"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
               />
             ) : (
               <div className="flex-1 flex items-center justify-center bg-gray-50">

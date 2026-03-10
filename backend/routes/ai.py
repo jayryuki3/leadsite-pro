@@ -10,9 +10,44 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database import get_db
 from models.lead import Lead, LeadDetail
+from models.ai_usage import AIUsageLog
 from routes.settings import get_setting_value, DEFAULT_CATEGORY_WEIGHTS
 
 router = APIRouter()
+
+# Cost per 1K tokens (approximate, varies by model)
+MODEL_COSTS = {
+    "gpt-4o": {"input": 0.0025, "output": 0.01},
+    "gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
+    "gpt-4-turbo": {"input": 0.01, "output": 0.03},
+    "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015},
+}
+
+
+async def log_ai_usage(db: AsyncSession, endpoint: str, model: str, usage: dict, lead_id: int = None):
+    """Log AI API usage for tracking and cost estimation."""
+    try:
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+        total_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
+        
+        # Estimate cost
+        costs = MODEL_COSTS.get(model, {"input": 0.005, "output": 0.015})  # default to mid-range
+        cost = (prompt_tokens / 1000 * costs["input"]) + (completion_tokens / 1000 * costs["output"])
+        
+        log_entry = AIUsageLog(
+            endpoint=endpoint,
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            cost_estimate=round(cost, 6),
+            lead_id=lead_id,
+        )
+        db.add(log_entry)
+        await db.flush()
+    except Exception as e:
+        print(f"[AI Usage Log] Failed to log: {e}")
 
 
 class ChatRequest(BaseModel):
@@ -23,8 +58,8 @@ class LocationRequest(BaseModel):
     location: str
 
 
-async def call_openai(db: AsyncSession, system_prompt: str, user_message: str, max_tokens: int = 1000) -> str:
-    """Helper to call any OpenAI-compatible API (OpenAI, Ollama, OpenRouter, Chutes, etc)."""
+async def call_openai(db: AsyncSession, system_prompt: str, user_message: str, max_tokens: int = 1000) -> dict:
+    """Helper to call any OpenAI-compatible API. Returns {content, usage, model}."""
     import httpx
     
     api_key = (await get_setting_value(db, "openai_api_key") or "").strip()
@@ -67,11 +102,24 @@ async def call_openai(db: AsyncSession, system_prompt: str, user_message: str, m
                 },
             )
             
+            # Rate limit and auth error detection
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("retry-after", "60")
+                raise HTTPException(status_code=429, detail=f"AI API rate limited. Retry after {retry_after}s. Consider upgrading your plan or reducing request frequency.")
+            if resp.status_code == 401:
+                raise HTTPException(status_code=401, detail="AI API key is invalid or expired. Check your API key in Settings.")
+            if resp.status_code == 403:
+                raise HTTPException(status_code=403, detail="AI API access denied. Your key may lack permissions or your account may be suspended.")
             if resp.status_code != 200:
-                raise HTTPException(status_code=502, detail=f"AI API error ({endpoint}): {resp.text}")
+                raise HTTPException(status_code=502, detail=f"AI API error ({resp.status_code}): {resp.text[:500]}")
             
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
+            usage = data.get("usage", {})
+            
+            return {"content": content, "usage": usage, "model": model}
+    except HTTPException:
+        raise
     except httpx.ConnectError:
         raise HTTPException(status_code=502, detail=f"Cannot connect to AI server at {endpoint}. Is it running?")
     except httpx.TimeoutException:
@@ -110,8 +158,9 @@ You can help with:
 
 Be concise and actionable."""
     
-    response = await call_openai(db, system_prompt, req.message)
-    return {"response": response}
+    result = await call_openai(db, system_prompt, req.message)
+    await log_ai_usage(db, "chat", result["model"], result["usage"])
+    return {"response": result["content"]}
 
 
 @router.post("/suggest-categories")
@@ -127,7 +176,9 @@ electrician, plumber, contractor, hvac, roofer, landscaper, painter, handyman, a
 
 Example: ["electrician", "plumber", "dentist", "salon"]"""
     
-    response = await call_openai(db, system_prompt, f"Location: {req.location}", max_tokens=200)
+    result = await call_openai(db, system_prompt, f"Location: {req.location}", max_tokens=200)
+    await log_ai_usage(db, "suggest-categories", result["model"], result["usage"])
+    response = result["content"]
     
     try:
         # Extract JSON array from response
@@ -169,8 +220,9 @@ Rating: {lead.rating} ({lead.review_count} reviews)
 Audit Details:
 {audit_data}"""
     
-    response = await call_openai(db, system_prompt, user_msg, max_tokens=500)
-    return {"analysis": response, "lead_id": lead_id}
+    result = await call_openai(db, system_prompt, user_msg, max_tokens=500)
+    await log_ai_usage(db, "analyze-audit", result["model"], result["usage"], lead_id=lead_id)
+    return {"analysis": result["content"], "lead_id": lead_id}
 
 
 @router.post("/explain-ranking/{lead_id}")
@@ -198,8 +250,9 @@ Website Quality: {lead.website_quality_score}/100 {'(no website!)' if lead.websi
 Rating: {lead.rating} stars, {lead.review_count} reviews
 Website: {lead.website or 'None'}"""
     
-    response = await call_openai(db, system_prompt, user_msg, max_tokens=300)
-    return {"explanation": response, "lead_id": lead_id}
+    result = await call_openai(db, system_prompt, user_msg, max_tokens=300)
+    await log_ai_usage(db, "explain-ranking", result["model"], result["usage"], lead_id=lead_id)
+    return {"explanation": result["content"], "lead_id": lead_id}
 
 
 @router.post("/profile-summary/{lead_id}")
@@ -235,10 +288,11 @@ Services: {json.dumps(detail.services) if detail.services else 'N/A'}
 Hours: {json.dumps(detail.hours) if detail.hours else 'N/A'}
 Top Reviews: {json.dumps(detail.top_reviews[:3]) if detail.top_reviews else 'N/A'}"""
     
-    response = await call_openai(db, system_prompt, user_msg, max_tokens=400)
+    result = await call_openai(db, system_prompt, user_msg, max_tokens=400)
+    await log_ai_usage(db, "profile-summary", result["model"], result["usage"], lead_id=lead_id)
     
     # Save to lead details
     if detail:
-        detail.ai_profile_summary = response
+        detail.ai_profile_summary = result["content"]
     
-    return {"summary": response, "lead_id": lead_id}
+    return {"summary": result["content"], "lead_id": lead_id}

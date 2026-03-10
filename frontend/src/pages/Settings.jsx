@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings as SettingsIcon, Key, Building2, MapPin, DollarSign, Mail, Eye, EyeOff, CheckCircle, XCircle, Loader2, Save, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
+import { Settings as SettingsIcon, Key, Building2, MapPin, DollarSign, Mail, Eye, EyeOff, CheckCircle, XCircle, Loader2, Save, RefreshCw, ChevronDown, ChevronUp, Brain } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../api/client'
 
@@ -152,6 +152,9 @@ export default function Settings() {
   const [smtpFromName, setSmtpFromName] = useState('')
   const [smtpFromEmail, setSmtpFromEmail] = useState('')
   
+  // AI Prompts
+  const [mockupSystemPrompt, setMockupSystemPrompt] = useState('')
+  
   // Pricing
   const [pricingTiers, setPricingTiers] = useState([])
 
@@ -229,6 +232,11 @@ export default function Settings() {
         setSmtpFromEmail(s.email.smtp_from_email?.value || '')
       }
       
+      // AI Prompts
+      if (s.ai_prompts) {
+        setMockupSystemPrompt(s.ai_prompts.mockup_system_prompt?.value || '')
+      }
+      
       // Pricing
       setPricingTiers(pricingRes.data.tiers)
       
@@ -270,6 +278,7 @@ export default function Settings() {
         smtp_username: smtpUser,
         smtp_from_name: smtpFromName,
         smtp_from_email: smtpFromEmail,
+        mockup_system_prompt: mockupSystemPrompt,
       }
       
       // Only include API keys if user entered new values
@@ -493,6 +502,23 @@ export default function Settings() {
           <p className="text-xs text-gray-500 mt-3">
             For Gmail: use an App Password (Settings → Security → 2-Step → App Passwords). Host: smtp.gmail.com, Port: 587.
           </p>
+        </SettingsSection>
+
+        {/* AI Prompts */}
+        <SettingsSection title="AI Prompts" icon={Brain}>
+          <div className="space-y-3">
+            <label className="block text-sm font-medium text-gray-700">Mockup System Prompt</label>
+            <p className="text-xs text-gray-500">
+              Custom system prompt for AI mockup generation. Leave empty to use the built-in default.
+              Use {'{business_info}'} in your prompt — it will be replaced with the lead's data.
+            </p>
+            <textarea
+              className="w-full h-48 px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-y"
+              value={mockupSystemPrompt}
+              onChange={e => setMockupSystemPrompt(e.target.value)}
+              placeholder={`You are a web designer. Generate a complete, modern single-page website as raw HTML with inline CSS and JS.\n\nGuidelines:\n- Analyze the business category and services to choose an appropriate design\n- Use a professional color scheme that fits the industry\n- Include hero section, services, testimonials (if reviews exist), about, and contact sections\n- Make it fully responsive with mobile-first design\n- Add smooth scroll navigation between sections\n- Handle missing data gracefully (skip sections if no data)\n- Include a call-to-action button linking to the business website or phone\n- Output ONLY the HTML — no markdown, no code fences`}
+            />
+          </div>
         </SettingsSection>
 
         {/* Pricing Tiers */}

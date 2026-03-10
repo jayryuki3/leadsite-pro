@@ -184,7 +184,9 @@ export default function Leads() {
       const res = await api.post(`/ai/explain-ranking/${leadId}`)
       setAiResults(prev => ({ ...prev, [`rank_${leadId}`]: res.data.explanation }))
     } catch (err) {
-      toast.error('AI explanation failed')
+      const detail = err.response?.data?.detail || err.message
+      toast.error('AI explanation failed: ' + detail)
+      console.error('AI explanation failed:', detail)
     } finally {
       setAiLoading(prev => ({ ...prev, [`rank_${leadId}`]: false }))
     }
@@ -387,7 +389,7 @@ export default function Leads() {
                             {auditingIds[lead.id] ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
                           </button>
                           {hasAudit && (
-                            <button onClick={() => { toggleExpand(lead.id); analyzeAudit(lead.id) }} disabled={aiLoading[lead.id]}
+                            <button onClick={() => { setExpandedRows(prev => ({ ...prev, [lead.id]: true })); analyzeAudit(lead.id) }} disabled={aiLoading[lead.id]}
                               className="p-1.5 hover:bg-blue-50 rounded text-blue-600" title="AI analysis">
                               {aiLoading[lead.id] ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
                             </button>
@@ -485,18 +487,27 @@ export default function Leads() {
                       </tr>
                     )}
 
-                    {/* AI ranking explanation */}
-                    {aiResults[`rank_${lead.id}`] && (
+                    {/* AI ranking explanation - loading or result */}
+                    {(aiLoading[`rank_${lead.id}`] || aiResults[`rank_${lead.id}`]) && (
                       <tr className="bg-purple-50/30">
                         <td colSpan={8} className="px-6 py-3">
                           <div className="flex items-start justify-between">
                             <div className="flex items-center gap-1.5 text-sm font-medium text-purple-700 mb-1">
-                              <Sparkles className="w-4 h-4" /> Ranking Explanation
+                              {aiLoading[`rank_${lead.id}`] ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                              Ranking Explanation
                             </div>
-                            <button onClick={() => setAiResults(prev => { const next = {...prev}; delete next[`rank_${lead.id}`]; return next })}
-                              className="text-purple-400 hover:text-purple-600 text-xs">dismiss</button>
+                            {!aiLoading[`rank_${lead.id}`] && aiResults[`rank_${lead.id}`] && (
+                              <button onClick={() => setAiResults(prev => { const next = {...prev}; delete next[`rank_${lead.id}`]; return next })}
+                                className="text-purple-400 hover:text-purple-600 text-xs">dismiss</button>
+                            )}
                           </div>
-                          <p className="text-sm text-gray-700 whitespace-pre-wrap">{aiResults[`rank_${lead.id}`]}</p>
+                          {aiLoading[`rank_${lead.id}`] ? (
+                            <div className="flex items-center gap-2 text-sm text-gray-400">
+                              <Loader2 className="w-4 h-4 animate-spin" /> Analyzing why this lead ranked here...
+                            </div>
+                          ) : (
+                            <p className="text-sm text-gray-700 whitespace-pre-wrap">{aiResults[`rank_${lead.id}`]}</p>
+                          )}
                         </td>
                       </tr>
                     )}

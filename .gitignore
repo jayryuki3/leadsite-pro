@@ -1,36 +1,31 @@
 # Python
+backend/venv/
 __pycache__/
-*.py[cod]
-*$py.class
-venv/
-*.egg-info/
-dist/
-build/
+*.pyc
+*.pyo
+.pytest_cache/
 
 # Node
-node_modules/
-.vite/
+frontend/node_modules/
+frontend/dist/
 
-# Database
-*.db
-*.sqlite3
+# Data & generated files
+data/
+mockups/
+screenshots/
+exports/
+photos/
 
-# Generated
-backend/mockups/
-backend/screenshots/
-backend/exports/
-
-# Environment
+# Environment & secrets
 .env
-.env.local
-.env.*.local
+*.key
+data/.encryption_key
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
 # OS
 .DS_Store
