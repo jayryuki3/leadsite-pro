@@ -113,7 +113,7 @@ export default function Leads() {
       if (categoryFilter) params.category = categoryFilter
       if (searchQuery) params.search = searchQuery
 
-      const res = await api.get('/leads', { params })
+      const res = await api.get('/leads/', { params })
       setLeads(res.data.leads)
       setTotal(res.data.total)
     } catch (err) {
