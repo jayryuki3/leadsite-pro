@@ -14,7 +14,7 @@ from models.lead import Lead, LeadDetail
 from models.mockup import Mockup
 from models.activity import Activity
 from routes.settings import get_setting_value
-from routes.ai import call_openai
+from routes.ai import call_openai, log_ai_usage
 
 router = APIRouter()
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -113,13 +113,19 @@ Google Maps: {lead.google_maps_url or 'N/A'}
         if detail.ai_profile_summary:
             biz_info += f"\nAI Profile Summary: {detail.ai_profile_summary}"
     
+    # Load custom system prompt from settings, fallback to default
+    custom_prompt = await get_setting_value(db, "mockup_system_prompt")
+    system_prompt = custom_prompt if custom_prompt else MOCKUP_SYSTEM_PROMPT
+    
     # Generate HTML via OpenAI
-    html_content = await call_openai(
+    ai_result = await call_openai(
         db,
-        MOCKUP_SYSTEM_PROMPT,
+        system_prompt,
         f"Create a website for this business:\n\n{biz_info}",
         max_tokens=4000,
     )
+    await log_ai_usage(db, "generate-mockup", ai_result["model"], ai_result["usage"], lead_id=lead_id)
+    html_content = ai_result["content"]
     
     # Clean up response - remove markdown fences if present
     html_content = html_content.strip()
@@ -283,12 +289,14 @@ CRITICAL RULES:
 6. Do not add markdown fences or explanations - return raw HTML only
 7. If adding a new page section, also add its nav link to both desktop and mobile menus"""
     
-    modified_html = await call_openai(
+    ai_result = await call_openai(
         db,
         edit_prompt,
         f"Current HTML:\n\n{html_content}",
         max_tokens=4000,
     )
+    await log_ai_usage(db, "ai-edit-mockup", ai_result["model"], ai_result["usage"], lead_id=mockup.lead_id)
+    modified_html = ai_result["content"]
     
     # Clean up
     modified_html = modified_html.strip()
