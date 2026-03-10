@@ -121,13 +121,14 @@ async def discover_businesses(req: DiscoverRequest, db: AsyncSession = Depends(g
 
     all_places = []
     seen_place_ids = set()
+    api_errors = []  # Collect errors to surface to the user
 
     # Check existing leads to dedup
     existing_result = await db.execute(select(Lead.place_id).where(Lead.place_id.isnot(None)))
     existing_ids = {row[0] for row in existing_result.fetchall()}
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        # ── Step 1: Nearby Search to find place_ids ──
+        # -- Step 1: Nearby Search to find place_ids --
         for ptype in place_types:
             params = {
                 "key": api_key,
@@ -138,16 +139,26 @@ async def discover_businesses(req: DiscoverRequest, db: AsyncSession = Depends(g
             if req.keyword:
                 params["keyword"] = req.keyword
 
-            resp = await client.get(
-                "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
-                params=params,
-            )
+            try:
+                resp = await client.get(
+                    "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
+                    params=params,
+                )
+            except Exception as e:
+                api_errors.append(f"Network error for type '{ptype}': {str(e)}")
+                continue
 
             if resp.status_code != 200:
+                api_errors.append(f"HTTP {resp.status_code} for type '{ptype}'")
                 continue
 
             data = resp.json()
-            if data.get("status") not in ("OK", "ZERO_RESULTS"):
+            api_status = data.get("status", "UNKNOWN")
+            if api_status == "ZERO_RESULTS":
+                continue
+            if api_status != "OK":
+                error_msg = data.get("error_message", api_status)
+                api_errors.append(f"Google API [{api_status}]: {error_msg}")
                 continue
 
             results = data.get("results", [])
@@ -245,10 +256,20 @@ async def discover_businesses(req: DiscoverRequest, db: AsyncSession = Depends(g
     db.add(activity)
     await db.commit()
 
-    return {
+    response = {
         "found": len(saved),
         "businesses": saved,
     }
+    # Surface API errors so the user knows WHY results are empty
+    if api_errors:
+        response["api_errors"] = list(set(api_errors))[:5]  # Dedupe, cap at 5
+    if not saved and api_errors:
+        # If we got zero results AND there were API errors, raise so the frontend shows the toast
+        raise HTTPException(
+            status_code=502,
+            detail=f"Google Places API error: {api_errors[0]}",
+        )
+    return response
 
 
 # ── List / Filter / Sort ──────────────────────────────────────────
