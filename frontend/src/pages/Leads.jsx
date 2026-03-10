@@ -170,7 +170,9 @@ export default function Leads() {
       const res = await api.post(`/ai/analyze-audit/${leadId}`)
       setAiResults(prev => ({ ...prev, [leadId]: res.data.analysis }))
     } catch (err) {
-      console.warn('AI analysis failed:', err)
+      const detail = err.response?.data?.detail || err.message
+      toast.error('AI analysis failed: ' + detail)
+      console.error('AI analysis failed:', detail)
     } finally {
       setAiLoading(prev => ({ ...prev, [leadId]: false }))
     }
