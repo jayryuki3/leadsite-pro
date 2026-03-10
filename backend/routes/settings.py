@@ -40,6 +40,7 @@ DEFAULT_SETTINGS = {
     # API Keys
     "google_places_api_key": {"value": "", "encrypted": True, "category": "api_keys"},
     "openai_api_key": {"value": "", "encrypted": True, "category": "api_keys"},
+    "ai_base_url": {"value": "https://api.openai.com/v1", "encrypted": False, "category": "api_keys"},
     "openai_model": {"value": "gpt-4o", "encrypted": False, "category": "api_keys"},
     "yelp_api_key": {"value": "", "encrypted": True, "category": "api_keys"},
     
@@ -311,12 +312,16 @@ async def test_api_key(provider: str, db: AsyncSession = Depends(get_db)):
     
     elif provider == "openai":
         key = await get_setting_value(db, "openai_api_key")
+        base_url = (await get_setting_value(db, "ai_base_url") or "https://api.openai.com/v1").rstrip("/")
         if not key:
-            raise HTTPException(status_code=400, detail="OpenAI API key not configured")
-        async with httpx.AsyncClient() as client:
+            raise HTTPException(status_code=400, detail="AI API key not configured")
+        headers = {}
+        if key.strip():
+            headers["Authorization"] = f"Bearer {key}"
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(
-                "https://api.openai.com/v1/models",
-                headers={"Authorization": f"Bearer {key}"},
+                f"{base_url}/models",
+                headers=headers,
             )
             return {"valid": resp.status_code == 200, "provider": provider}
     
@@ -335,27 +340,36 @@ async def test_api_key(provider: str, db: AsyncSession = Depends(get_db)):
     raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
 
-# ── OpenAI Model List ─────────────────────────────────────────────────────
+# ── AI Model List (OpenAI-compatible) ─────────────────────────────────────
 
 @router.get("/openai-models")
 async def get_openai_models(db: AsyncSession = Depends(get_db)):
-    """Fetch available OpenAI models."""
+    """Fetch available models from any OpenAI-compatible API."""
     import httpx
     key = await get_setting_value(db, "openai_api_key")
+    base_url = (await get_setting_value(db, "ai_base_url") or "https://api.openai.com/v1").rstrip("/")
+    
     if not key:
         return {"models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]}
     
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            "https://api.openai.com/v1/models",
-            headers={"Authorization": f"Bearer {key}"},
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            gpt_models = sorted([
-                m["id"] for m in data["data"]
-                if m["id"].startswith("gpt-")
-            ], reverse=True)
-            return {"models": gpt_models if gpt_models else ["gpt-4o", "gpt-4o-mini"]}
+    headers = {}
+    if key.strip():
+        headers["Authorization"] = f"Bearer {key}"
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{base_url}/models", headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                # Handle both OpenAI format {"data": [...]} and Ollama format {"models": [...]}
+                model_list = data.get("data") or data.get("models") or []
+                models = sorted([
+                    m.get("id") or m.get("name") or m.get("model", "")
+                    for m in model_list
+                    if m.get("id") or m.get("name") or m.get("model")
+                ])
+                return {"models": models if models else ["gpt-4o", "gpt-4o-mini"]}
+    except Exception:
+        pass
     
     return {"models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]}
