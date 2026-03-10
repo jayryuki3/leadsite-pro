@@ -1,5 +1,7 @@
 #!/bin/bash
 
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 echo "========================================="
 echo "  LeadSite Pro - Starting..."
 echo "========================================="
@@ -16,21 +18,18 @@ trap cleanup SIGINT SIGTERM
 
 # Start backend
 echo "[Backend] Starting FastAPI on http://localhost:8000..."
-cd backend
-source venv/bin/activate
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload &
+cd "$ROOT_DIR/backend"
+./venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --reload &
 BACKEND_PID=$!
-cd ..
 
 # Wait for backend to be ready
 sleep 2
 
 # Start frontend
 echo "[Frontend] Starting Vite on http://localhost:5173..."
-cd frontend
-npm run dev &
+cd "$ROOT_DIR/frontend"
+./node_modules/.bin/vite &
 FRONTEND_PID=$!
-cd ..
 
 echo ""
 echo "========================================="
