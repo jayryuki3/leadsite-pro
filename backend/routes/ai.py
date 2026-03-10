@@ -27,38 +27,55 @@ async def call_openai(db: AsyncSession, system_prompt: str, user_message: str, m
     """Helper to call any OpenAI-compatible API (OpenAI, Ollama, OpenRouter, Chutes, etc)."""
     import httpx
     
-    api_key = await get_setting_value(db, "openai_api_key")
+    api_key = (await get_setting_value(db, "openai_api_key") or "").strip()
     base_url = (await get_setting_value(db, "ai_base_url") or "https://api.openai.com/v1").rstrip("/")
     model = await get_setting_value(db, "openai_model") or "gpt-4o"
     
-    if not api_key:
+    # Determine if this looks like a local/self-hosted server (Ollama, LM Studio, etc)
+    is_local = any(h in base_url for h in ["localhost", "127.0.0.1", "0.0.0.0", ":11434"])
+    
+    # Only require API key for remote providers
+    if not api_key and not is_local:
         raise HTTPException(status_code=400, detail="AI API key not configured. Go to Settings.")
     
     headers = {"Content-Type": "application/json"}
-    # Some local servers (Ollama) don't need auth; only add if key is non-empty
-    if api_key.strip():
+    if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(
-            f"{base_url}/chat/completions",
-            headers=headers,
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message},
-                ],
-                "max_tokens": max_tokens,
-                "temperature": 0.7,
-            },
-        )
-        
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"AI API error ({base_url}): {resp.text}")
-        
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+    # Build the endpoint URL - avoid doubling /chat/completions if user already included it
+    if base_url.endswith("/chat/completions"):
+        endpoint = base_url
+    elif base_url.endswith("/v1"):
+        endpoint = f"{base_url}/chat/completions"
+    else:
+        # If they gave something like http://localhost:11434, add the full path
+        endpoint = f"{base_url}/v1/chat/completions"
+    
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                endpoint,
+                headers=headers,
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
+                    "max_tokens": max_tokens,
+                    "temperature": 0.7,
+                },
+            )
+            
+            if resp.status_code != 200:
+                raise HTTPException(status_code=502, detail=f"AI API error ({endpoint}): {resp.text}")
+            
+            data = resp.json()
+            return data["choices"][0]["message"]["content"]
+    except httpx.ConnectError:
+        raise HTTPException(status_code=502, detail=f"Cannot connect to AI server at {endpoint}. Is it running?")
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail=f"AI server at {endpoint} timed out after 120s. Model might be loading.")
 
 
 @router.post("/chat")
