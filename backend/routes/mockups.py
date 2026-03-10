@@ -28,26 +28,51 @@ class AiEditRequest(BaseModel):
     instruction: str
 
 
-MOCKUP_SYSTEM_PROMPT = """You are an expert web designer. Generate a complete, production-ready single-page HTML website for a local business.
+MOCKUP_SYSTEM_PROMPT = """You are an expert web designer. Generate a complete, production-ready MULTI-PAGE single-file HTML website for a local business.
 
-Requirements:
+The site must work as a single-file SPA with multiple navigable "pages" using JavaScript show/hide.
+
+ARCHITECTURE:
 - Use Tailwind CSS via CDN: <script src="https://cdn.tailwindcss.com"></script>
+- Use Lucide Icons via CDN: <script src="https://unpkg.com/lucide@latest"></script> then call lucide.createIcons() after DOM loads
+- Each "page" is a <section> with a unique id (e.g. id="page-home", id="page-about", id="page-services", id="page-contact")
+- Only one page-section is visible at a time (display:block), the rest are hidden (display:none)
+- Navigation links call a JS function showPage('page-home') that hides all page-sections and shows the target
+- The FIRST page (Home) is visible by default on load
+
+REQUIRED PAGES:
+1. HOME - Hero section with compelling headline, tagline, and CTA button. Quick overview cards for services.
+2. ABOUT - Business story, mission, team/owner info (2-3 paragraphs). Include an FAQ accordion (click to expand/collapse answers).
+3. SERVICES - Grid of service cards with icons, descriptions, and pricing placeholders.
+4. CONTACT - Address, phone, email, business hours, a contact form with JS validation (required fields, email format, show inline errors, show success toast on valid submit), and a Google Map placeholder iframe.
+
+NAVIGATION:
+- Sticky top nav bar with business name/logo on the left, page links in the center, and phone number on the right
+- Mobile: hamburger menu button that toggles a slide-down mobile menu with the same page links
+- Active page link should be visually highlighted (e.g. underline or color change)
+- All nav links use onclick="showPage('page-xxx')" and also close the mobile menu if open
+
+INTERACTIVE ELEMENTS:
+- showPage() function scrolls to top of page when switching
+- FAQ accordion on About page: clicking a question toggles its answer visibility
+- Floating "Back to Top" button (appears on scroll, smooth scrolls to top)
+- Contact form: inline validation on submit, success message displayed without page reload
+- Hover effects on all cards and buttons (scale, shadow, or color transitions)
+- Mobile hamburger menu open/close toggle
+
+DESIGN:
 - Fully responsive (mobile-first)
 - Modern, clean, professional design
-- Include these sections:
-  1. Navigation bar with business name and phone
-  2. Hero section with compelling headline, tagline, and CTA button
-  3. About section (2-3 sentences)
-  4. Services section (grid of cards)
-  5. Testimonials section (2-3 real reviews if provided)
-  6. Contact section with address, phone, hours, embedded Google Map placeholder
-  7. Footer with social links and copyright
-- Use appropriate icons (Heroicons via CDN or Unicode symbols)
-- Color scheme: extract from brand colors if provided, otherwise choose a professional scheme matching the industry
-- Include a "Book Now" or "Get a Quote" floating CTA button
-- All placeholder images should use https://placehold.co/ with appropriate dimensions
+- Color scheme: extract from brand colors if provided, otherwise choose a professional palette matching the industry
+- Use https://placehold.co/ for all placeholder images with appropriate dimensions
+- Consistent spacing, typography, and border-radius throughout
+- Footer on every page with business name, quick links, and copyright
+
+OUTPUT RULES:
 - The HTML must be COMPLETE and SELF-CONTAINED (no external files except CDN links)
-- Return ONLY the HTML code, no markdown fences, no explanations"""
+- Include ALL JavaScript in a single <script> tag before </body>
+- The script MUST include: showPage(), mobile menu toggle, FAQ accordion, form validation, back-to-top button logic
+- Return ONLY raw HTML. No markdown fences, no explanations, no comments outside the HTML."""
 
 
 @router.post("/generate/{lead_id}")
@@ -245,12 +270,18 @@ async def ai_edit_mockup(mockup_id: int, data: AiEditRequest, db: AsyncSession =
     if not html_content:
         raise HTTPException(status_code=400, detail="No HTML content to edit")
     
-    edit_prompt = f"""You are editing an existing HTML website. Apply the following change:
+    edit_prompt = f"""You are editing an existing multi-page single-file HTML website. Apply ONLY the requested change.
 
 INSTRUCTION: {data.instruction}
 
-Return the COMPLETE modified HTML. Do not explain, just return the full HTML code.
-Do not add markdown fences."""
+CRITICAL RULES:
+1. PRESERVE all existing page sections (page-home, page-about, page-services, page-contact, etc.) - do NOT remove or merge them
+2. PRESERVE the showPage() navigation system, mobile hamburger menu toggle, FAQ accordion, form validation, and back-to-top logic
+3. PRESERVE all existing JavaScript in the <script> tag - only add to it if the instruction requires new interactivity
+4. Only modify the specific part the instruction asks about - leave everything else UNCHANGED
+5. Return the COMPLETE HTML document including ALL pages and ALL scripts, even sections you did not change
+6. Do not add markdown fences or explanations - return raw HTML only
+7. If adding a new page section, also add its nav link to both desktop and mobile menus"""
     
     modified_html = await call_openai(
         db,
