@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import { PaintBucket, Loader2, Sparkles, Eye, Code, Send, Download, ChevronDown, RefreshCw, ExternalLink } from 'lucide-react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import api from '../api/client'
 
 export default function MockupBuilder() {
   const { id: mockupIdParam } = useParams()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const iframeRef = useRef(null)
   
   const [leads, setLeads] = useState([])
@@ -44,6 +45,9 @@ export default function MockupBuilder() {
       ])
       setLeads(leadsRes.data.leads)
       setMockups(mockupsRes.data.mockups)
+      // Auto-select lead from query param (e.g. /mockups?lead=123)
+      const preselect = searchParams.get('lead')
+      if (preselect) setSelectedLead(parseInt(preselect))
     } catch (err) {
       toast.error('Failed to load data')
     } finally {
