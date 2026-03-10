@@ -14,4 +14,3 @@ python-multipart==0.0.9
 pillow==10.4.0
 playwright==1.47.0
 jinja2==3.1.4
-smtplib-submitter==1.0.0
