@@ -3,7 +3,7 @@ import { Settings as SettingsIcon, Key, Building2, MapPin, DollarSign, Mail, Eye
 import toast from 'react-hot-toast'
 import api from '../api/client'
 
-// ── Section Component ────────────────────────────────────────────────
+// ── Section Component ────────────────────────────────────────────
 function SettingsSection({ title, icon: Icon, children, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
@@ -23,7 +23,7 @@ function SettingsSection({ title, icon: Icon, children, defaultOpen = false }) {
   )
 }
 
-// ── Password Input with Toggle ───────────────────────────────────────
+// ── Password Input with Toggle ───────────────────────────────────
 function SecretInput({ label, value, onChange, placeholder, onTest, testLoading, testResult }) {
   const [show, setShow] = useState(false)
   return (
@@ -63,7 +63,7 @@ function SecretInput({ label, value, onChange, placeholder, onTest, testLoading,
   )
 }
 
-// ── Text Input ─────────────────────────────────────────────────────
+// ── Text Input ───────────────────────────────────────────────────
 function TextInput({ label, value, onChange, placeholder, type = 'text' }) {
   return (
     <div>
@@ -79,7 +79,7 @@ function TextInput({ label, value, onChange, placeholder, type = 'text' }) {
   )
 }
 
-// ── Pricing Tier Card ────────────────────────────────────────────────
+// ── Pricing Tier Card ────────────────────────────────────────────
 function PricingTierCard({ tier, onChange }) {
   return (
     <div className="border border-gray-200 rounded-lg p-4 space-y-3">
@@ -115,7 +115,7 @@ function PricingTierCard({ tier, onChange }) {
   )
 }
 
-// ── Main Settings Page ───────────────────────────────────────────────
+// ── Main Settings Page ───────────────────────────────────────────
 export default function Settings() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -129,6 +129,7 @@ export default function Settings() {
   const [openaiModel, setOpenaiModel] = useState('gpt-4o')
   const [yelpKey, setYelpKey] = useState('')
   const [availableModels, setAvailableModels] = useState(['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'])
+  const [modelsLoading, setModelsLoading] = useState(false)
   
   // Business Info
   const [bizName, setBizName] = useState('')
@@ -159,13 +160,35 @@ export default function Settings() {
     loadSettings()
   }, [])
 
+  const fetchModels = async (url) => {
+    // Fetch models independently so it never blocks settings load
+    try {
+      setModelsLoading(true)
+      // If a URL is provided, save it first so the backend queries the right endpoint
+      if (url) {
+        await api.put('/settings/ai_base_url', { value: url })
+      }
+      const res = await api.get('/settings/openai-models')
+      if (res.data.models?.length) {
+        setAvailableModels(res.data.models)
+        toast.success(`Found ${res.data.models.length} model(s)`)
+      } else {
+        toast.error('No models found at this endpoint')
+      }
+    } catch (err) {
+      console.warn('Could not fetch AI models:', err.message)
+      toast.error('Could not connect to AI endpoint')
+    } finally {
+      setModelsLoading(false)
+    }
+  }
+
   const loadSettings = async () => {
     try {
       setLoading(true)
-      const [settingsRes, pricingRes, modelsRes] = await Promise.all([
+      const [settingsRes, pricingRes] = await Promise.all([
         api.get('/settings'),
         api.get('/settings/pricing'),
-        api.get('/settings/openai-models'),
       ])
       
       const s = settingsRes.data.settings
@@ -208,7 +231,16 @@ export default function Settings() {
       
       // Pricing
       setPricingTiers(pricingRes.data.tiers)
-      setAvailableModels(modelsRes.data.models)
+      
+      // Fetch models in background — don't block page load, suppress toasts on init
+      ;(async () => {
+        try {
+          setModelsLoading(true)
+          const res = await api.get('/settings/openai-models')
+          if (res.data.models?.length) setAvailableModels(res.data.models)
+        } catch (e) { /* silent on init */ }
+        finally { setModelsLoading(false) }
+      })()
     } catch (err) {
       console.error('Failed to load settings:', err)
       toast.error('Failed to load settings')
@@ -250,6 +282,9 @@ export default function Settings() {
       
       // Save pricing tiers
       await api.put('/settings/pricing', pricingTiers)
+      
+      // Re-fetch models in case the user changed the AI base URL
+      fetchModels()
       
       toast.success('Settings saved successfully!')
     } catch (err) {
@@ -371,22 +406,40 @@ export default function Settings() {
               </p>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">AI Model</label>
-              <input
-                type="text"
-                value={openaiModel}
-                onChange={(e) => setOpenaiModel(e.target.value)}
-                list="model-suggestions"
-                placeholder="gpt-4o, llama3, deepseek-coder, etc."
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <datalist id="model-suggestions">
-                {availableModels.map(m => (
-                  <option key={m} value={m} />
-                ))}
-              </datalist>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-medium text-gray-700">AI Model</label>
+                <button
+                  onClick={() => fetchModels(aiBaseUrl)}
+                  disabled={modelsLoading}
+                  className="text-xs text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
+                >
+                  {modelsLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                  {modelsLoading ? 'Loading...' : 'Refresh Models'}
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <select
+                  value={openaiModel}
+                  onChange={(e) => setOpenaiModel(e.target.value)}
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                >
+                  {availableModels.map(m => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                  {!availableModels.includes(openaiModel) && openaiModel && (
+                    <option value={openaiModel}>{openaiModel} (custom)</option>
+                  )}
+                </select>
+                <input
+                  type="text"
+                  value={openaiModel}
+                  onChange={(e) => setOpenaiModel(e.target.value)}
+                  placeholder="Or type model name"
+                  className="w-40 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
               <p className="text-xs text-gray-500 mt-1">
-                Select from detected models or type any model name your provider supports
+                Pick from detected models or type any name. Click Refresh after changing the Base URL.
               </p>
             </div>
             <SecretInput
