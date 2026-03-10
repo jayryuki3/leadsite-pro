@@ -3,7 +3,7 @@ import { Settings as SettingsIcon, Key, Building2, MapPin, DollarSign, Mail, Eye
 import toast from 'react-hot-toast'
 import api from '../api/client'
 
-// ── Section Component ────────────────────────────────────────────
+// ── Section Component ────────────────────────────────────────────────
 function SettingsSection({ title, icon: Icon, children, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
@@ -23,7 +23,7 @@ function SettingsSection({ title, icon: Icon, children, defaultOpen = false }) {
   )
 }
 
-// ── Password Input with Toggle ───────────────────────────────────
+// ── Password Input with Toggle ───────────────────────────────────────
 function SecretInput({ label, value, onChange, placeholder, onTest, testLoading, testResult }) {
   const [show, setShow] = useState(false)
   return (
@@ -63,7 +63,7 @@ function SecretInput({ label, value, onChange, placeholder, onTest, testLoading,
   )
 }
 
-// ── Text Input ───────────────────────────────────────────────────
+// ── Text Input ─────────────────────────────────────────────────────
 function TextInput({ label, value, onChange, placeholder, type = 'text' }) {
   return (
     <div>
@@ -79,7 +79,7 @@ function TextInput({ label, value, onChange, placeholder, type = 'text' }) {
   )
 }
 
-// ── Pricing Tier Card ────────────────────────────────────────────
+// ── Pricing Tier Card ────────────────────────────────────────────────
 function PricingTierCard({ tier, onChange }) {
   return (
     <div className="border border-gray-200 rounded-lg p-4 space-y-3">
@@ -115,7 +115,7 @@ function PricingTierCard({ tier, onChange }) {
   )
 }
 
-// ── Main Settings Page ───────────────────────────────────────────
+// ── Main Settings Page ───────────────────────────────────────────────
 export default function Settings() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -125,6 +125,7 @@ export default function Settings() {
   // API Keys
   const [googleKey, setGoogleKey] = useState('')
   const [openaiKey, setOpenaiKey] = useState('')
+  const [aiBaseUrl, setAiBaseUrl] = useState('https://api.openai.com/v1')
   const [openaiModel, setOpenaiModel] = useState('gpt-4o')
   const [yelpKey, setYelpKey] = useState('')
   const [availableModels, setAvailableModels] = useState(['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'])
@@ -173,6 +174,7 @@ export default function Settings() {
       if (s.api_keys) {
         setGoogleKey(s.api_keys.google_places_api_key?.has_value ? '' : '')
         setOpenaiKey(s.api_keys.openai_api_key?.has_value ? '' : '')
+        setAiBaseUrl(s.api_keys.ai_base_url?.value || 'https://api.openai.com/v1')
         setOpenaiModel(s.api_keys.openai_model?.value || 'gpt-4o')
         setYelpKey(s.api_keys.yelp_api_key?.has_value ? '' : '')
       }
@@ -220,6 +222,7 @@ export default function Settings() {
       setSaving(true)
       
       const updates = {
+        ai_base_url: aiBaseUrl,
         openai_model: openaiModel,
         business_name: bizName,
         business_email: bizEmail,
@@ -346,25 +349,45 @@ export default function Settings() {
               testResult={testResults.google_places}
             />
             <SecretInput
-              label="OpenAI API Key"
+              label="AI API Key"
               value={openaiKey}
               onChange={setOpenaiKey}
-              placeholder="sk-..."
+              placeholder="sk-... or provider key"
               onTest={() => testApiKey('openai')}
               testLoading={testLoading.openai}
               testResult={testResults.openai}
             />
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">OpenAI Model</label>
-              <select
+              <label className="block text-sm font-medium text-gray-700 mb-1">AI Base URL</label>
+              <input
+                type="text"
+                value={aiBaseUrl}
+                onChange={(e) => setAiBaseUrl(e.target.value)}
+                placeholder="https://api.openai.com/v1"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                OpenAI: https://api.openai.com/v1 &middot; Ollama: http://localhost:11434/v1 &middot; Or any OpenAI-compatible endpoint
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">AI Model</label>
+              <input
+                type="text"
                 value={openaiModel}
                 onChange={(e) => setOpenaiModel(e.target.value)}
+                list="model-suggestions"
+                placeholder="gpt-4o, llama3, deepseek-coder, etc."
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
+              />
+              <datalist id="model-suggestions">
                 {availableModels.map(m => (
-                  <option key={m} value={m}>{m}</option>
+                  <option key={m} value={m} />
                 ))}
-              </select>
+              </datalist>
+              <p className="text-xs text-gray-500 mt-1">
+                Select from detected models or type any model name your provider supports
+              </p>
             </div>
             <SecretInput
               label="Yelp Fusion API Key (Optional)"
