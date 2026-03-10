@@ -295,19 +295,27 @@ async def test_api_key(provider: str, db: AsyncSession = Depends(get_db)):
             return {"valid": False, "provider": provider, "error": resp.text}
     
     elif provider == "openai":
-        key = await get_setting_value(db, "openai_api_key")
+        key = (await get_setting_value(db, "openai_api_key") or "").strip()
         base_url = (await get_setting_value(db, "ai_base_url") or "https://api.openai.com/v1").rstrip("/")
-        if not key:
+        is_local = any(h in base_url for h in ["localhost", "127.0.0.1", "0.0.0.0", ":11434"])
+        if not key and not is_local:
             raise HTTPException(status_code=400, detail="AI API key not configured")
         headers = {}
-        if key.strip():
+        if key:
             headers["Authorization"] = f"Bearer {key}"
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                f"{base_url}/models",
-                headers=headers,
-            )
-            return {"valid": resp.status_code == 200, "provider": provider}
+        # Normalize URL for /models endpoint
+        if base_url.endswith("/chat/completions"):
+            models_url = base_url.rsplit("/chat/completions", 1)[0] + "/models"
+        elif base_url.endswith("/v1"):
+            models_url = f"{base_url}/models"
+        else:
+            models_url = f"{base_url}/v1/models"
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(models_url, headers=headers)
+                return {"valid": resp.status_code == 200, "provider": provider}
+        except httpx.ConnectError:
+            return {"valid": False, "provider": provider, "error": f"Cannot connect to {models_url}"}
     
     elif provider == "yelp":
         key = await get_setting_value(db, "yelp_api_key")
@@ -330,19 +338,28 @@ async def test_api_key(provider: str, db: AsyncSession = Depends(get_db)):
 async def get_openai_models(db: AsyncSession = Depends(get_db)):
     """Fetch available models from any OpenAI-compatible API."""
     import httpx
-    key = await get_setting_value(db, "openai_api_key")
+    key = (await get_setting_value(db, "openai_api_key") or "").strip()
     base_url = (await get_setting_value(db, "ai_base_url") or "https://api.openai.com/v1").rstrip("/")
+    is_local = any(h in base_url for h in ["localhost", "127.0.0.1", "0.0.0.0", ":11434"])
     
-    if not key:
+    if not key and not is_local:
         return {"models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]}
     
     headers = {}
-    if key.strip():
+    if key:
         headers["Authorization"] = f"Bearer {key}"
+    
+    # Normalize URL for /models endpoint
+    if base_url.endswith("/chat/completions"):
+        models_url = base_url.rsplit("/chat/completions", 1)[0] + "/models"
+    elif base_url.endswith("/v1"):
+        models_url = f"{base_url}/models"
+    else:
+        models_url = f"{base_url}/v1/models"
     
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{base_url}/models", headers=headers)
+            resp = await client.get(models_url, headers=headers)
             if resp.status_code == 200:
                 data = resp.json()
                 # Handle both OpenAI format {"data": [...]} and Ollama format {"models": [...]}
