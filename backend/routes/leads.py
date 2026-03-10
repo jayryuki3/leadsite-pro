@@ -436,7 +436,10 @@ async def get_lead(lead_id: int, db: AsyncSession = Depends(get_db)):
         "category": lead.category,
         "status": lead.status,
         "audit_score": lead.audit_score,
+        "website_quality_score": lead.website_quality_score,
         "opportunity_score": lead.opportunity_score,
+        "audit_details": lead.audit_details,
+        "google_maps_url": lead.google_maps_url,
         "lat": lead.lat,
         "lng": lead.lng,
         "photo_ref": lead.photo_ref,
@@ -458,6 +461,7 @@ async def get_lead(lead_id: int, db: AsyncSession = Depends(get_db)):
             "yelp_url": detail.yelp_url,
             "audit_data": detail.audit_data,
             "tech_stack": detail.tech_stack,
+            "ai_profile_summary": detail.ai_profile_summary,
         }
     else:
         lead_data["detail"] = None
@@ -470,7 +474,7 @@ async def get_lead(lead_id: int, db: AsyncSession = Depends(get_db)):
 @router.patch("/{lead_id}/status")
 async def update_lead_status(lead_id: int, req: StatusUpdate, db: AsyncSession = Depends(get_db)):
     """Update a lead's pipeline status."""
-    valid_statuses = ["new", "audited", "prospect", "mockup_sent", "contacted", "responded", "closed_won", "closed_lost"]
+    valid_statuses = ["new", "audited", "prospect", "mockup_created", "mockup_sent", "contacted", "responded", "closed_won", "closed_lost"]
     if req.status not in valid_statuses:
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_statuses}")
 
@@ -492,6 +496,25 @@ async def update_lead_status(lead_id: int, req: StatusUpdate, db: AsyncSession =
     await db.commit()
 
     return {"id": lead_id, "status": req.status}
+
+
+# ── Notes Update ──────────────────────────────────────────────────
+
+class NotesUpdate(BaseModel):
+    notes: str
+
+@router.patch("/{lead_id}/notes")
+async def update_lead_notes(lead_id: int, req: NotesUpdate, db: AsyncSession = Depends(get_db)):
+    """Update a lead's notes."""
+    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = result.scalar_one_or_none()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    lead.notes = req.notes
+    await db.commit()
+
+    return {"id": lead_id, "notes": req.notes}
 
 
 # ── Delete ────────────────────────────────────────────────────────
@@ -574,34 +597,47 @@ async def rank_leads(db: AsyncSession = Depends(get_db)):
     ranked = 0
 
     for lead in leads:
-        # Factor 1: Category value (0-25)
-        cat_weight = cat_weights.get(lead.category, 5) / 10  # Normalize 1-10 -> 0.1-1.0
-        category_score = cat_weight * 25
+        # ── Opportunity = how much this business NEEDS a website ──
+        # High opportunity = no website or bad website + established business
+        # Low opportunity  = already has a good website
 
-        # Factor 2: Website deficiency (0-30)
-        if not lead.website:
-            website_score = 30  # No website = highest opportunity
-        elif lead.audit_score is not None:
-            # Lower audit score = higher opportunity
-            website_score = max(0, 30 - (lead.audit_score * 0.3))
+        # Factor 1: Category value (0-15) - lower weight, just a multiplier
+        cat_weight = cat_weights.get(lead.category, 5) / 10  # 0.1-1.0
+        category_score = cat_weight * 15
+
+        # Factor 2: Website deficiency (0-40) - DOMINANT factor
+        # No site / terrible site = highest score, great site = near zero
+        wqs = lead.website_quality_score
+        if not lead.website or wqs == 0:
+            website_score = 40  # No website at all = maximum opportunity
+        elif wqs == -1:
+            website_score = 25  # Has website but unaudited - assume medium
+        elif wqs <= 30:
+            website_score = 35  # Bad website = high opportunity
+        elif wqs <= 60:
+            website_score = 20  # Mediocre website = medium opportunity
+        elif wqs <= 80:
+            website_score = 8   # Decent website = low opportunity
         else:
-            website_score = 15  # Has website but not audited
+            website_score = 0   # Great website = no opportunity
 
-        # Factor 3: Review signal (0-25)
+        # Factor 3: Review signal (0-20) - established businesses can pay
         if lead.review_count > 0:
-            # High reviews + high rating = established business that can pay
-            review_signal = min(25, (lead.review_count / 100) * 15 + (lead.rating / 5) * 10)
+            review_signal = min(20, (lead.review_count / 100) * 12 + (lead.rating / 5) * 8)
         else:
-            review_signal = 5  # Unknown
+            review_signal = 3  # Unknown / no reviews
 
-        # Factor 4: Competition gap (0-20)
-        # Businesses with moderate reviews but poor web presence
-        if not lead.website and lead.review_count > 10:
-            competition_score = 20
-        elif lead.audit_score and lead.audit_score < 50 and lead.review_count > 5:
-            competition_score = 15
-        elif lead.audit_score and lead.audit_score < 70:
-            competition_score = 10
+        # Factor 4: Competition gap (0-25) - poor web + good reputation = goldmine
+        if (not lead.website or wqs == 0) and lead.review_count > 10:
+            competition_score = 25  # No site but people find them anyway
+        elif (not lead.website or wqs == 0) and lead.review_count > 0:
+            competition_score = 18
+        elif wqs >= 1 and wqs <= 40 and lead.review_count > 5:
+            competition_score = 20  # Bad site + decent reviews
+        elif wqs >= 1 and wqs <= 60 and lead.review_count > 5:
+            competition_score = 12  # Mediocre site + reviews
+        elif wqs > 80:
+            competition_score = 0   # Good site = no gap
         else:
             competition_score = 5
 
