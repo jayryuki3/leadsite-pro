@@ -72,6 +72,35 @@ class BulkDeleteRequest(BaseModel):
     confirm: bool = False
 
 
+# ── Geocoding Helper ──────────────────────────────────────────────
+
+import re as _re
+
+_LATLNG_RE = _re.compile(r'^\s*(-?\d+\.?\d*),\s*(-?\d+\.?\d*)\s*$')
+
+
+async def _geocode_location(location: str, api_key: str) -> str:
+    """Convert a text address to 'lat,lng'. Pass-through if already lat,lng."""
+    if _LATLNG_RE.match(location):
+        return location.strip()
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(
+            "https://maps.googleapis.com/maps/api/geocode/json",
+            params={"address": location, "key": api_key},
+        )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail="Geocoding request failed")
+        data = resp.json()
+        if data.get("status") != "OK" or not data.get("results"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not geocode '{location}'. Try a more specific address or use GPS.",
+            )
+        loc = data["results"][0]["geometry"]["location"]
+        return f"{loc['lat']},{loc['lng']}"
+
+
 # ── Discovery ─────────────────────────────────────────────────────
 
 @router.post("/discover")
@@ -79,7 +108,10 @@ async def discover_businesses(req: DiscoverRequest, db: AsyncSession = Depends(g
     """Discover businesses via Google Places API."""
     api_key = await get_setting_value(db, "google_places_api_key")
     if not api_key:
-        raise HTTPException(status_code=400, detail="Google Places API key not configured")
+        raise HTTPException(status_code=400, detail="Google Places API key not configured. Add it in Settings.")
+
+    # Geocode text addresses to lat,lng
+    latlng = await _geocode_location(req.location, api_key)
 
     # Gather all Google place types from selected categories
     place_types = []
@@ -95,10 +127,11 @@ async def discover_businesses(req: DiscoverRequest, db: AsyncSession = Depends(g
     existing_ids = {row[0] for row in existing_result.fetchall()}
 
     async with httpx.AsyncClient(timeout=30.0) as client:
+        # ── Step 1: Nearby Search to find place_ids ──
         for ptype in place_types:
             params = {
                 "key": api_key,
-                "location": req.location,
+                "location": latlng,
                 "radius": req.radius,
                 "type": ptype,
             }
@@ -114,6 +147,9 @@ async def discover_businesses(req: DiscoverRequest, db: AsyncSession = Depends(g
                 continue
 
             data = resp.json()
+            if data.get("status") not in ("OK", "ZERO_RESULTS"):
+                continue
+
             results = data.get("results", [])
 
             for place in results:
@@ -132,46 +168,86 @@ async def discover_businesses(req: DiscoverRequest, db: AsyncSession = Depends(g
 
                 loc = place.get("geometry", {}).get("location", {})
 
-                lead = Lead(
-                    place_id=pid,
-                    name=place.get("name", "Unknown"),
-                    address=place.get("vicinity", ""),
-                    phone=place.get("formatted_phone_number", ""),
-                    website=place.get("website", ""),
-                    rating=place.get("rating", 0.0),
-                    review_count=place.get("user_ratings_total", 0),
-                    category=detected_cat,
-                    lat=loc.get("lat", 0.0),
-                    lng=loc.get("lng", 0.0),
-                    status="new",
-                    photo_ref=place.get("photos", [{}])[0].get("photo_reference", "") if place.get("photos") else "",
-                )
-                db.add(lead)
                 all_places.append({
-                    "name": lead.name,
-                    "address": lead.address,
-                    "category": lead.category,
-                    "rating": lead.rating,
-                    "review_count": lead.review_count,
-                    "website": lead.website,
-                    "lat": lead.lat,
-                    "lng": lead.lng,
+                    "place_id": pid,
+                    "name": place.get("name", "Unknown"),
+                    "address": place.get("vicinity", ""),
+                    "category": detected_cat,
+                    "rating": place.get("rating", 0.0),
+                    "review_count": place.get("user_ratings_total", 0),
+                    "lat": loc.get("lat", 0.0),
+                    "lng": loc.get("lng", 0.0),
+                    "photo_ref": place.get("photos", [{}])[0].get("photo_reference", "") if place.get("photos") else "",
+                    # These come from Place Details, not Nearby Search
+                    "phone": "",
+                    "website": "",
                 })
+
+        # ── Step 2: Place Details for phone & website (batch, capped) ──
+        # Limit detail lookups to avoid quota burn (max 60 per scan)
+        detail_places = all_places[:60]
+        for p in detail_places:
+            try:
+                detail_resp = await client.get(
+                    "https://maps.googleapis.com/maps/api/place/details/json",
+                    params={
+                        "key": api_key,
+                        "place_id": p["place_id"],
+                        "fields": "formatted_phone_number,website,formatted_address",
+                    },
+                )
+                if detail_resp.status_code == 200:
+                    detail_data = detail_resp.json().get("result", {})
+                    p["phone"] = detail_data.get("formatted_phone_number", "")
+                    p["website"] = detail_data.get("website", "")
+                    if detail_data.get("formatted_address"):
+                        p["address"] = detail_data["formatted_address"]
+            except Exception:
+                pass  # Keep what we have from Nearby Search
+
+    # ── Step 3: Save leads to DB ──
+    saved = []
+    for p in all_places:
+        lead = Lead(
+            place_id=p["place_id"],
+            name=p["name"],
+            address=p["address"],
+            phone=p["phone"],
+            website=p["website"],
+            rating=p["rating"],
+            review_count=p["review_count"],
+            category=p["category"],
+            lat=p["lat"],
+            lng=p["lng"],
+            status="new",
+            photo_ref=p["photo_ref"],
+        )
+        db.add(lead)
+        saved.append({
+            "name": p["name"],
+            "address": p["address"],
+            "category": p["category"],
+            "rating": p["rating"],
+            "review_count": p["review_count"],
+            "website": p["website"],
+            "lat": p["lat"],
+            "lng": p["lng"],
+        })
 
     await db.commit()
 
     # Log activity
     activity = Activity(
         action="discovery_scan",
-        description=f"Discovered {len(all_places)} businesses near {req.location}",
-        metadata_json={"categories": req.categories, "radius": req.radius, "found": len(all_places)},
+        description=f"Discovered {len(saved)} businesses near {req.location}",
+        metadata_json={"categories": req.categories, "radius": req.radius, "found": len(saved)},
     )
     db.add(activity)
     await db.commit()
 
     return {
-        "found": len(all_places),
-        "businesses": all_places,
+        "found": len(saved),
+        "businesses": saved,
     }
 
 
