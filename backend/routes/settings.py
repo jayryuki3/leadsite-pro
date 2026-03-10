@@ -65,6 +65,9 @@ DEFAULT_SETTINGS = {
     "smtp_password": {"value": "", "encrypted": True, "category": "email"},
     "smtp_from_name": {"value": "", "encrypted": False, "category": "email"},
     "smtp_from_email": {"value": "", "encrypted": False, "category": "email"},
+    
+    # AI Prompts
+    "mockup_system_prompt": {"value": "", "encrypted": False, "category": "ai_prompts"},
 }
 
 DEFAULT_PRICING_TIERS = [
