@@ -199,30 +199,6 @@ async def audit_website(url: str) -> dict:
         return {"score": 5, "has_website": True, "details": {**metrics, "error": str(e)}}
 
 
-@router.post("/{lead_id}")
-async def audit_single_lead(lead_id: int, db: AsyncSession = Depends(get_db)):
-    """Audit a single lead's website."""
-    result = await db.execute(select(Lead).where(Lead.id == lead_id))
-    lead = result.scalar_one_or_none()
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    
-    audit_result = await audit_website(lead.website)
-    
-    lead.website_quality_score = audit_result["score"]
-    lead.audit_details = audit_result["details"]
-    lead.status = "audited" if lead.status == "new" else lead.status
-    
-    return {
-        "lead_id": lead_id,
-        "name": lead.name,
-        "website": lead.website,
-        "score": audit_result["score"],
-        "has_website": audit_result["has_website"],
-        "details": audit_result["details"],
-    }
-
-
 @router.post("/batch")
 async def audit_batch(limit: int = 20, db: AsyncSession = Depends(get_db)):
     """Audit unaudited leads in batch."""
@@ -274,4 +250,30 @@ async def audit_summary(db: AsyncSession = Depends(get_db)):
         "audited": audited.scalar(),
         "no_website": no_website.scalar(),
         "average_score": round(avg_score.scalar() or 0, 1),
+    }
+
+
+# ── Single Lead Audit (catch-all — MUST be last to avoid shadowing /batch and /summary) ─
+
+@router.post("/{lead_id}")
+async def audit_single_lead(lead_id: int, db: AsyncSession = Depends(get_db)):
+    """Audit a single lead's website."""
+    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = result.scalar_one_or_none()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    
+    audit_result = await audit_website(lead.website)
+    
+    lead.website_quality_score = audit_result["score"]
+    lead.audit_details = audit_result["details"]
+    lead.status = "audited" if lead.status == "new" else lead.status
+    
+    return {
+        "lead_id": lead_id,
+        "name": lead.name,
+        "website": lead.website,
+        "score": audit_result["score"],
+        "has_website": audit_result["has_website"],
+        "details": audit_result["details"],
     }
