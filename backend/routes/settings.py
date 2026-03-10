@@ -223,15 +223,6 @@ async def get_all_settings(db: AsyncSession = Depends(get_db)):
     return {"settings": settings}
 
 
-@router.put("/{key}")
-async def update_setting(key: str, data: SettingUpdate, db: AsyncSession = Depends(get_db)):
-    """Update a single setting."""
-    default = DEFAULT_SETTINGS.get(key)
-    category = default["category"] if default else "general"
-    await set_setting_value(db, key, data.value, category)
-    return {"success": True, "key": key}
-
-
 @router.put("/")
 async def update_settings_bulk(data: SettingsBulkUpdate, db: AsyncSession = Depends(get_db)):
     """Update multiple settings at once."""
@@ -240,13 +231,6 @@ async def update_settings_bulk(data: SettingsBulkUpdate, db: AsyncSession = Depe
         category = default["category"] if default else "general"
         await set_setting_value(db, key, str(value), category)
     return {"success": True, "updated": list(data.settings.keys())}
-
-
-@router.get("/raw/{key}")
-async def get_setting_raw(key: str, db: AsyncSession = Depends(get_db)):
-    """Get the raw (decrypted) value of a setting. Used internally."""
-    value = await get_setting_value(db, key)
-    return {"key": key, "value": value}
 
 
 # ── Pricing Tiers ─────────────────────────────────────────────────────────
@@ -373,3 +357,21 @@ async def get_openai_models(db: AsyncSession = Depends(get_db)):
         pass
     
     return {"models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]}
+
+
+# ── Single Setting (catch-all — MUST be last to avoid shadowing named routes) ─
+
+@router.get("/raw/{key}")
+async def get_setting_raw(key: str, db: AsyncSession = Depends(get_db)):
+    """Get the raw (decrypted) value of a setting. Used internally."""
+    value = await get_setting_value(db, key)
+    return {"key": key, "value": value}
+
+
+@router.put("/{key}")
+async def update_setting(key: str, data: SettingUpdate, db: AsyncSession = Depends(get_db)):
+    """Update a single setting. This route is last because {key} matches any path segment."""
+    default = DEFAULT_SETTINGS.get(key)
+    category = default["category"] if default else "general"
+    await set_setting_value(db, key, data.value, category)
+    return {"success": True, "key": key}
