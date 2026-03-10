@@ -24,18 +24,29 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     
     total_leads = sum(status_counts.values())
     
-    # Audit stats
-    audited = await db.execute(select(func.count(Lead.id)).where(Lead.website_quality_score >= 0))
-    no_website = await db.execute(select(func.count(Lead.id)).where(Lead.website_quality_score == 0))
-    avg_score = await db.execute(select(func.avg(Lead.website_quality_score)).where(Lead.website_quality_score > 0))
+    # Audit stats - extract scalar immediately (results can only be consumed once)
+    audited_result = await db.execute(select(func.count(Lead.id)).where(Lead.website_quality_score >= 0))
+    audited_count = audited_result.scalar() or 0
+    
+    no_website_result = await db.execute(select(func.count(Lead.id)).where(Lead.website_quality_score == 0))
+    no_website_count = no_website_result.scalar() or 0
+    
+    avg_score_result = await db.execute(select(func.avg(Lead.website_quality_score)).where(Lead.website_quality_score > 0))
+    avg_score_val = round(avg_score_result.scalar() or 0, 1)
     
     # Mockup count
-    mockup_count = await db.execute(select(func.count(Mockup.id)))
+    mockup_result = await db.execute(select(func.count(Mockup.id)))
+    mockup_count = mockup_result.scalar() or 0
     
     # Email stats
-    email_total = await db.execute(select(func.count(EmailDraft.id)))
-    email_sent = await db.execute(select(func.count(EmailDraft.id)).where(EmailDraft.status == "sent"))
-    email_draft = await db.execute(select(func.count(EmailDraft.id)).where(EmailDraft.status == "draft"))
+    email_total_result = await db.execute(select(func.count(EmailDraft.id)))
+    email_total_count = email_total_result.scalar() or 0
+    
+    email_sent_result = await db.execute(select(func.count(EmailDraft.id)).where(EmailDraft.status == "sent"))
+    email_sent_count = email_sent_result.scalar() or 0
+    
+    email_draft_result = await db.execute(select(func.count(EmailDraft.id)).where(EmailDraft.status == "draft"))
+    email_draft_count = email_draft_result.scalar() or 0
     
     # Category distribution
     cat_query = select(Lead.category, func.count(Lead.id)).group_by(Lead.category).order_by(func.count(Lead.id).desc()).limit(10)
@@ -45,10 +56,10 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     # Funnel data
     funnel = [
         {"stage": "Discovered", "count": total_leads},
-        {"stage": "Audited", "count": audited.scalar() or 0},
+        {"stage": "Audited", "count": audited_count},
         {"stage": "Prospects", "count": status_counts.get("prospect", 0) + status_counts.get("mockup_created", 0) + status_counts.get("contacted", 0) + status_counts.get("responded", 0) + status_counts.get("converted", 0)},
-        {"stage": "Mockups", "count": mockup_count.scalar() or 0},
-        {"stage": "Contacted", "count": (email_sent.scalar() or 0)},
+        {"stage": "Mockups", "count": mockup_count},
+        {"stage": "Contacted", "count": email_sent_count},
         {"stage": "Responded", "count": status_counts.get("responded", 0)},
         {"stage": "Converted", "count": status_counts.get("converted", 0)},
     ]
@@ -56,13 +67,13 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     return {
         "total_leads": total_leads,
         "status_counts": status_counts,
-        "audited": audited.scalar() or 0,
-        "no_website": no_website.scalar() or 0,
-        "avg_website_score": round(avg_score.scalar() or 0, 1),
-        "mockup_count": mockup_count.scalar() or 0,
-        "email_total": email_total.scalar() or 0,
-        "email_sent": email_sent.scalar() or 0,
-        "email_drafts": email_draft.scalar() or 0,
+        "audited": audited_count,
+        "no_website": no_website_count,
+        "avg_website_score": avg_score_val,
+        "mockup_count": mockup_count,
+        "email_total": email_total_count,
+        "email_sent": email_sent_count,
+        "email_drafts": email_draft_count,
         "top_categories": top_categories,
         "funnel": funnel,
     }
