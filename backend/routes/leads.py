@@ -282,10 +282,31 @@ async def list_leads(
     search: Optional[str] = None,
     sort_by: str = "created_at",
     sort_dir: str = "desc",
-    page: int = 1,
+    sort_order: Optional[str] = None,
+    page: Optional[int] = None,
     per_page: int = 25,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
 ):
-    """List leads with filtering, sorting, and pagination."""
+    """List leads with filtering, sorting, and pagination.
+
+    Accepts both pagination styles:
+      - page/per_page (1-indexed pages)
+      - offset/limit  (direct offset)
+    Also accepts sort_order as alias for sort_dir.
+    """
+    # Accept sort_order as alias for sort_dir
+    effective_sort_dir = sort_order or sort_dir
+
+    # Resolve pagination: offset/limit takes priority if provided
+    if offset is not None:
+        effective_offset = offset
+        effective_limit = limit or per_page
+    else:
+        effective_page = page or 1
+        effective_limit = limit or per_page
+        effective_offset = (effective_page - 1) * effective_limit
+
     query = select(Lead)
 
     if status:
@@ -307,22 +328,21 @@ async def list_leads(
 
     # Sort
     sort_col = getattr(Lead, sort_by, Lead.created_at)
-    if sort_dir == "asc":
+    if effective_sort_dir == "asc":
         query = query.order_by(asc(sort_col))
     else:
         query = query.order_by(desc(sort_col))
 
     # Paginate
-    offset = (page - 1) * per_page
-    query = query.offset(offset).limit(per_page)
+    query = query.offset(effective_offset).limit(effective_limit)
 
     result = await db.execute(query)
     leads = result.scalars().all()
 
     return {
         "total": total,
-        "page": page,
-        "per_page": per_page,
+        "page": page or (effective_offset // effective_limit + 1),
+        "per_page": effective_limit,
         "leads": [
             {
                 "id": l.id,
@@ -334,8 +354,11 @@ async def list_leads(
                 "review_count": l.review_count,
                 "category": l.category,
                 "status": l.status,
+                "website_quality_score": l.website_quality_score if l.website_quality_score is not None else -1,
                 "audit_score": l.audit_score,
+                "audit_details": l.audit_details,
                 "opportunity_score": l.opportunity_score,
+                "google_maps_url": l.google_maps_url,
                 "lat": l.lat,
                 "lng": l.lng,
                 "created_at": str(l.created_at) if l.created_at else None,
